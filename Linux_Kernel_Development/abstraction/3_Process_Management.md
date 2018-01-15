@@ -27,3 +27,169 @@ thread 란?
  * 요즘은 1 process 가 여러개 스레드 가지지만 스케줄링 단위는 thread 이다.
  * Linux는  unique thread implementation 을 가짐. process 구현이 따로 있는게 아님.
  * **To Linux, a thread is a special kind of process.**
+ 
+현대 OS가 가상화 하는 두가지.
+ 1. virtualized processor
+    * process 는 자기 혼자 processor 를 쓰는 걸로 앎
+    * [Chapter 4 "Process Scheduling"]() 에서 자세히 배움
+ 2. virtual memory
+    * process 가 사용할 메모리를 할당해 주고, process 는 시스템의 모든 메모리를 가지고 쓰는 것 처럼 관리해준다.
+    * [Chapter 12 "Memory Management"]() 에서 자세히 배움
+ * `프로세스 내의 스레드들은 virtual memory 는 공유, 하지만 각자 자신의 virtualized processor 를 받음`
+ 
+ ### Process Descriptor and Task Structure
+ 
+ ```c
+ struct task_struct{
+    unsinged long state;
+    int prio;
+    unsinged long policy;
+    struct task_strct * parent;
+    struct list_head tasks;
+    pid_t pid;
+ 
+ }
+```
+
+process descriptor 는 struct task_struct 여기에 프로세스에 대한 모든 정보가 다 담겨있다.
+
+#### Allocating the Process Descriptor
+
+task_struct 구조체는 slab allocator 에 의해 할당됨.
+ * slab allocator provide object reuse and cache coloring.
+ 
+kernel 2.6 이전에는 task_struct 는 각 프로세스의 kernel stack 의 맨 마지막에 저장되었음
+ * 이렇게 하면 register 가 적은 architecture 에서 따로 위치를 저장하지 않아도 stack pointer 로 바로 process descriptor 를 가리킬 수 있음
+
+```c
+struct thread_info{
+    struct task_struct  *task;
+    struct exec_domain  *exec_domain;
+    __u32               flags;
+    __u32               status;
+    __u32               cpu;
+    int                 preempt_count;
+    mm_segment_t        addr_limit;
+    struct restart_block restart_block;
+    void                *sysenter_return;
+    int                 uaccess_err;
+}
+```
+new structure (2.6 부터?)
+ * slab allocator 가 struct thread_info 를 동적으로 할당.
+    * thread_info structure 는 항상 해당 stack 의 맨 마지막에(최초생성) 있음.
+        * bottom of the stack (for stacks that grow down)
+        * top of the stack (for stacks that grow up)
+        
+#### Storing the Process Descriptor
+pid 로 process를 식별한다
+  * pid_t type (내부적으로 int 값임)
+    * 단 max 는 32,768 (short int) - compatibility 때문
+  * 동시에 max 값 만큼의 프로세스가 돌 수 있음.
+  * 클 수록 나중에 실행된 프로세스
+  * max 값을 올릴 수는 있음
+    * /proc/sys/kernel/pid_max 에서
+    * 단, old application 이랑 compatibility 깨짐
+    
+`current` macro 로 현재 수행중인 task 의 task_struct 에 바로 접근할 수 있음.
+ * x86 은 13 least-significant bits of the stack pointer 마스킹으로 current 를 계산해서 thread_info 구조체를 가져옴.
+    * current_thread_info()
+ * task_struct 는 `current_thread_info()->task;` 로 가져온다
+
+```assembly
+// eax = 32bit 범용 레지스터
+// esp = stack pointer
+movl $-8192, %eax   // 레지스터에 8KB stack move
+andl %esp, %eax     // 레지스터에 stack pointer and 연산
+```
+
+#### Process State
+![Flow chart of process states](http://4.bp.blogspot.com/-k9KDTfkN8Gs/UxILiXK0sOI/AAAAAAAAA1c/7I_LlZ9xiwI/s1600/03fig03.gif)
+
+task_struct 의 state 값으로 프로세스의 현재 상태를 알 수 있음 
+ * TASK_RUNNING - The process is runnable.
+    * running 중이거나 run-queue 에서 waiting 중 (runqueues in [Chapter4)]())
+ * TASK_INTERRUPTIBLE - The process is sleeping(blocked), waiting for some condition to exit.
+    * 깨어날 조건이 존재하면 kernel 이 signal 을 보내서 TASK_RUNNING 상태로 바꿈
+ * TASK_UNINTERRUPTIBLE - 깨어날 수 없는 상태. (그 외의 조건은 TASK_INTERRUPTIBLE 이랑 같음)
+    * interrupt 되지 않고 기다려야 하는 상황.
+ * __TASK_TRACED - The process is being traced by another process, such as a debugger, via _ptrace_.
+ * __TASK_STOPPED - Process execution has stooped.
+    * running 도 아니고 running 가능한 상태도아님.
+    * signal 을 받았을 때. (SIGSTOP, SIGTSTP, SIGTTIN, SIGTTOU)
+    * 디버깅 하는 다른 signal 받앗을 때
+
+#### Manipulating the Current Process State
+`set_task_state(task, state);`
+
+`task->state = state;`
+
+`set_current_state(state);`
+
+구현은 `<linux/sched.h>` 보셈
+
+#### Process Context
+프로그램을 실행하면 user-space 에서 돈다.
+
+SystemCall 을 하면 kernel-space로 넘어간다. 이때 kernel 에서 process context 에 접근해야 할 때, current 매크로를 통해서 접근할 수 있다.
+
+kernel 작업을 끝내면 다시 user-space 에서 resume 한다.
+
+kernel 에 대한 접근은 System call, exception handler 제공하는 interface 로 한다.
+
+#### The Process Family Tree
+모든 프로세스의 최초 조상은 _init_ process (pid is 1). 
+
+kernel 은 부팅이 끝나면 마지막에 이 _init_ process 를 실행시킨다.
+
+_init_ process 는 _initscripts_ 를 읽는다.
+
+모든 프로세스는 하나의 parent 를 가짐.
+ * task_struct 안에는 task_struct type의 parent 가 있음
+
+`struct task_struct *my_parent = current->parent; `
+
+모든 프로세스는 0개 또는 여러개의 children 을 가짐
+    
+같은 프로세스를 parent 로 가지는 프로세스들은 _siblings_.
+
+예제1 : sibling
+```c
+struct task_struct *task;
+struct list_head *list;
+
+list_for_each(list, &current->children){
+    task = list_entry(list, struct task_struct, sibling);
+    /* task now points to one of current's children */
+}
+```
+
+예제2 : init process 찾아가기
+```c
+struct task_struct *task;
+for(task = current; task != &init_task; task = task->parent);
+/* task now points to init */
+```
+
+예제3 :  모든 process 돌기
+ * **Q: 그런데 이럴 일이 있나?**
+```c
+list_entry(task->tasks.next, struct task_struct, tasks);
+list_entry(task->tasks.prev, struct task_struct, tasks);
+```
+아래 매크로와 같다.
+```c
+next_task(task)
+prev_task(task)
+```
+
+예제4 : 이건 왜 있는거지?ㅋ
+```c
+struct task_struct *task;
+
+for_each_process(task){
+    printk("%s[%d]\n", task->comm, task->pid);
+    /* task 이름[pid 번호] */
+}
+
+```
