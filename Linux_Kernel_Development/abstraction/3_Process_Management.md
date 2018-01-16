@@ -191,5 +191,51 @@ for_each_process(task){
     printk("%s[%d]\n", task->comm, task->pid);
     /* task 이름[pid 번호] */
 }
-
 ```
+
+### Process Creation
+Process creation in Unix is a _spawn_ mechanism
+ 1. fork()
+    * creates a child process that is a copy of the current task
+    * parent process 와 다른점
+        * pid
+        * 특정 resources and statistics 
+            * pending signals
+ 2. exec()
+    * load a new executable into the address space and begins executing it.
+    
+#### Copy-on-Write
+fork()
+ * parent 에 있는 모든 resource 가 복제됨
+ * 그런데 너무 비효율적. 그래서 리눅스에서 fork() 는 _copy-on-write(COW)_ pages 를 사용함.
+ * overhead 는 parent 의 page tables 를 duplicate 하는 정도만 발생.
+ 
+COW(copy-on-write)
+ * delay or altogether prevent copying of the data
+    * parent process 의 address space 를 복제X. parent 와 child 가 single copy 를 공유함.(read-only)
+    * 해당 데이터를 write 하겠다고 marking 되면 그때 duplicate 가 일어나서 각 프로세스가 unique copy 를 가짐.
+
+Unix 의 기본 철학은 quick process execution.
+
+#### Forking
+Linux 의 fork() 는 clone() system call 로 구현함. 어떤 resource 를 parent 와 child 가 share 할 지 flag 로 넘김.(flag 설명은 [The Linux Implementation of Theads](#the-linux-implementation-of-theads) 섹션)
+ 
+ ㅇ
+ 
+ ㅇ
+ 
+ ㅇ
+ ㅇ
+ 
+ ㅇ
+ 
+ ㅇ
+ 
+ ㅇ
+ 
+ ㅇ
+ ㅇ
+ 
+ ㅇ
+ 
+### The Linux Implementation of Theads
