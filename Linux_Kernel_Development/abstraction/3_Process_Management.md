@@ -99,8 +99,9 @@ pid 로 process를 식별한다
 ```assembly
 // eax = 32bit 범용 레지스터
 // esp = stack pointer
-movl $-8192, %eax   // 레지스터에 8KB stack move
+movl $-8192, %eax   // 레지스터가 가지는 주소위치 8KB stack move
 andl %esp, %eax     // 레지스터에 stack pointer and 연산
+//* %esp가 가리키는 stack pointer 는 8KB 의 stack 공간을 쓸 수 있다.
 ```
 
 #### Process State
@@ -219,23 +220,57 @@ Unix 의 기본 철학은 quick process execution.
 
 #### Forking
 Linux 의 fork() 는 clone() system call 로 구현함. 어떤 resource 를 parent 와 child 가 share 할 지 flag 로 넘김.(flag 설명은 [The Linux Implementation of Theads](#the-linux-implementation-of-theads) 섹션)
+ * fork(), vfork(), __clone() 모두 내부적으로 clone() 콜함.
+    * clone() 은 do_fork()를 콜함. `<kernel/fork.c>`
+        * do_fork() 는 copy_process() 를 콜하고, 프로세스가 시작됨.
+        
+copy_process()
+ 1. dup_task_struct() 를 콜함
+    * create new kernel stack, _thread_info_ structure, _task_struct_
+    * 이 시점에 child 와 parent 의 process descriptor 는 같다.
+ 2. child 가 OS 의 current user 의 리소스제한을 넘지 않는지 체크
+ 3. differentiate from its parent
+    * process descriptor 의 멤버들을 clear or set to initial value
+    * inherit 안되는 애들은 보통 통계정보
+    * _task_struct_ 의 대부분 정보는 바뀌지 않음
+ 4. child 의 state 를 TASK_UNINTERRUPTIBILE 로 바꿈. not yet run.
+ 5. copy_flags() 콜함
+    * update the _flags_ member of _task_struct_.
+    * PF_SUPERPRIV flag is cleared. (task 를 super user 가 소유권 가지는지 가리키는 거)
+    * PF_FORKNOEXEC flag is set.
+ 6. alloc_pid() 콜함
+ 7. clone()에 던진 flag 에 따라서 duplicate / share 를 결정
+    * openfile
+    * filesystem info
+    * signal handlers
+    * process address space
+    * namespace
+ 8. copy_process() cleans up, return to the caller a pointer to the new child.
  
- ㅇ
+copy_process() 가 성공적으로 child 를 리턴하면 do_fork() 에서 child 를 깨우고 run 시킴.
+ * Deliberately, the kernel runs the child process first.
+    * **Q : 이 말은 run 부터 하고 return 한다는 건가?**
+
+#### vfork()
+fork() 랑 효과는 같음. 대신 parent 의 page table 이 copy 되지 않음.
+
+대신 parent address space 를 쓰는 thread 를 하나 띄움. 그리고 parent 는 child 가 exec() 또는 exits 할때 까지 block 됨.
+ * 대신 parent address space 에 write 는 못함.
+
+fork() 와의 비교해서 장점은 parent 의 page table 을 copy 하지 않는 것 뿐.
+ * page table 또한 COW 가 적용되면 vfork() 를 쓸 이유는 전혀 없어짐.
+    * **Q : 3.x 대 커널은 어떻게 구현되어있지?**
+    
+vfork() 의 동작. (until kernel 2.2)
+ 0. 내부적으로 clone() system call 에 flag 를 넣도록 구현되어있음.
+ 1. In _copy_process()_, the _task_struct_ member _vfork_done_ is set to NULL.
+ 2. In _do_fork()_, if the special flag was given, _vfork_done_ is pointed at a specific address.
+ 3. After the child is first run, the parent - instead of returning - waits for the child to signal it through the vfork_done pointer.
+    * **Q : 그럼 spin lock 으로 기다리나?**
+ 4. In the _mm_release()_ function, which is used when a task exits a memory address space, _vfork_done_ is checked to see whether it is NULL. If it is not, the parent is signaled.
+ 5. Back in do_fork(), the parent wakes up and returns.
  
- ㅇ
- 
- ㅇ
- ㅇ
- 
- ㅇ
- 
- ㅇ
- 
- ㅇ
- 
- ㅇ
- ㅇ
- 
- ㅇ
- 
+
 ### The Linux Implementation of Theads
+
+ 
