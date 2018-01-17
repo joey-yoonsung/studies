@@ -81,6 +81,8 @@ new structure (2.6 부터?)
         * bottom of the stack (for stacks that grow down)
         * top of the stack (for stacks that grow up)
         
+*flag 사용 방식은 | 연산한 숫자로 넘기고 & 로 체크한다.(1자리 bit 값이 하나의 정보를 나타냄) (Java NIO SelectionKey 방식)*
+
 #### Storing the Process Descriptor
 pid 로 process를 식별한다
   * pid_t type (내부적으로 int 값임)
@@ -180,8 +182,8 @@ list_entry(task->tasks.prev, struct task_struct, tasks);
 ```
 아래 매크로와 같다.
 ```c
-next_task(task)
-prev_task(task)
+next_task(task);
+prev_task(task);
 ```
 
 예제4 : 이건 왜 있는거지?ㅋ
@@ -221,9 +223,10 @@ Unix 의 기본 철학은 quick process execution.
 #### Forking
 Linux 의 fork() 는 clone() system call 로 구현함. 어떤 resource 를 parent 와 child 가 share 할 지 flag 로 넘김.(flag 설명은 [The Linux Implementation of Theads](#the-linux-implementation-of-theads) 섹션)
  * fork(), vfork(), __clone() 모두 내부적으로 clone() 콜함.
-    * clone() 은 do_fork()를 콜함. `<kernel/fork.c>`
+    * clone() 은 do_fork()를 콜함. [<kernel/fork.c>](https://github.com/torvalds/linux/blob/master/kernel/fork.c)
         * do_fork() 는 copy_process() 를 콜하고, 프로세스가 시작됨.
-        
+
+
 copy_process()
  1. dup_task_struct() 를 콜함
     * create new kernel stack, _thread_info_ structure, _task_struct_
@@ -248,8 +251,6 @@ copy_process()
  8. copy_process() cleans up, return to the caller a pointer to the new child.
  
 copy_process() 가 성공적으로 child 를 리턴하면 do_fork() 에서 child 를 깨우고 run 시킴.
- * Deliberately, the kernel runs the child process first.
-    * **Q : 이 말은 run 부터 하고 return 한다는 건가?**
 
 #### vfork()
 fork() 랑 효과는 같음. 대신 parent 의 page table 이 copy 되지 않음.
@@ -258,8 +259,9 @@ fork() 랑 효과는 같음. 대신 parent 의 page table 이 copy 되지 않음
  * 대신 parent address space 에 write 는 못함.
 
 fork() 와의 비교해서 장점은 parent 의 page table 을 copy 하지 않는 것 뿐.
- * page table 또한 COW 가 적용되면 vfork() 를 쓸 이유는 전혀 없어짐.
+ * page table 또한 COW 가 적용되면 vfork() 를 쓸 이유는 전혀 없어짐. 
     * **Q : 3.x 대 커널은 어떻게 구현되어있지?**
+        * 지금 버전 코드보면 vfork 일때 전처리가 다른 경우가 do_fork() 에 없는거 같은데?
     
 vfork() 의 동작. (until kernel 2.2)
  0. 내부적으로 clone() system call 에 flag 를 넣도록 구현되어있음.
@@ -267,6 +269,8 @@ vfork() 의 동작. (until kernel 2.2)
  2. In _do_fork()_, if the special flag was given, _vfork_done_ is pointed at a specific address.
  3. After the child is first run, the parent - instead of returning - waits for the child to signal it through the vfork_done pointer.
     * **Q : 그럼 spin lock 으로 기다리나?**
+        * fork.c 에 `wait_for_vfork_done()` -> `wait_for_completion_killable()` in [<kernel/sched/completion.c>](https://github.com/torvalds/linux/blob/master/kernel/sched/completion.c)
+            * 응 스핀락 맞아.
  4. In the _mm_release()_ function, which is used when a task exits a memory address space, _vfork_done_ is checked to see whether it is NULL. If it is not, the parent is signaled.
  5. Back in do_fork(), the parent wakes up and returns.
  
@@ -395,6 +399,10 @@ static struct task_struct *find_new_reaper(struct task_struct *father)
     }
     return pid_ns->child_reaper;
 }
+/**
+ *  likely와 unlikely는 if 분기문에서  likely를 주면  컴파일러에게  해당 분기문에서 참인 경우가 더 많을 것이라는 정보를 주어 성능을 추가적으로 성능시키는 함수이다. 반대로 if 분기문 안에 unlikely를 주면 거짓인 경우가 더 많을 것이라는 정보를 준다.
+ *  출처: http://www.morenice.kr/74 [morenice's blog]
+ */
 
 ```
 
