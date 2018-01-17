@@ -272,5 +272,149 @@ vfork() 의 동작. (until kernel 2.2)
  
 
 ### The Linux Implementation of Theads
+Thread enable _concurrent programming_ and, on multiple processor systems, true parallelism.
+
+Linux implements all threads as standard processes.
+ * 다른 프로세스와 자원을 공유하는 프로세스 일 뿐.
+ * Each thread has a unique _task_struct_.
+ * MS, Solaris 는 lightweight process 로 커널이 별도로 다룸.
+
+#### Creating Threads
+thread 를 만들때 불리는 clone
+ * `clone(CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND, 0);`
+ 
+일반 fork()
+ *  `clone(SIGCHLD, 0);`
+ 
+일반 vfork()
+ * `clone(CLONE_VFORK | CLONE_VM | SIGCHLD, 0);`
+ 
+#### Kernel Threads
+kernel 이 백그라운드 작업하기 위해 도는 스레드
+ * normal processes 와의 차이점
+    * do not have an address space
+        * mm pointer is NULL.
+    * operate only in kernel-space and do not context switch into user-space.
+ * flush task, ksoftirqd task 도 kernel thread 를 delegates 함.
+ * `ps -ef` 명령어로 커널 스레드 확인할 수 있어  
+ * new kernel thread : _kthreadd_
+
+The interface _kthreadd_ in `<linux/kthread.h>`
+ *  `struct task_struct *kthread_create(int (*threadfn)(void *data), void *data, const char namefmt[], ...)`
+ * 이 내부에서 clone 이 불려서 new task 만듬 
+ * 새로 만들어진 프로세스는 _threadfn_ 함수를 실행시킴.
+ * namefmt 는 프로세스 실행시 넘겨줄 args
+ * thread is created, but unrunnable.
+ * `wake_up_process()` 를 해야함 
+ * `kthread_run()` : create thread & make runnable
+    * `struct task_struct *kthread_run(int (*threadfn)(void *data), void *data, const char namefmt[], ...)`
+
+```c
+#define kthread_run(threadfn, data, namefmt, ...)
+({
+    struct task_struct *k;
+    
+    k=kthread_create(threadfn, data, namefmt, ## __VA_ARGS__);
+    if(!IS_ERR(k))
+        wake_up_process(k);
+    k;
+})
+```
+
+이렇게 실행된 스레드는 do_exit()를 내부에서 부르던가, 다른 곳에서 `kthread_stop()` 을 부르면 끝남
+ * `int kthread_stop(struct task_struct *k)` 
+ 
+### Process Termination
+종료는 `exit()` 시스템콜
+ * C 프로그램의 경우 main 함수의 return 이후에 `exit()` 가 불리게 되어있다.
+ 
+또는 process 가 handle, ignore 할 수 없는 signal 이나 exception 을 받은 경우.
+
+`kernel/exit.c` 에 정의된 `do_exit()`의 동작
+ 1. _task_struct_ 의 PF_EXITING 플래그를 세팅한다.
+ 2. `del_timer_sync()` 를 콜해서 kernel timer 를 지운다.
+ 3. BSD process accounting 이 가능하면, `acc_update_integrals()` 를 콜해서 accounting info 를 쓴다.
+ 4. `exit_mm()` 을 콜해서 mm_struct 를 release 한다. 이 address space 를 다른 프로세스에서 사용하지 않으면 kernel 이 해당 공간을 destroy 함.
+ 5. `exit_sem()` 을 콜함. 해당 프로세스가 IPC semaphore 에 queueing 되어있다면 dequeue 됨.
+ 6. `exit_files()`, `exit_fs()` 를 콜해서 fd 나 filesystem data 에 관련된 카운팅을 감소시킴.
+ 7. `task_struct` 에 있는 _exit_code_ 값을 세팅함 
+ 8. `exit_notify()` 를 통해 parent 에 signal 을 보냄.
+ 9. `schedule()` 을 콜해서 새로운 프로세스로 switching 함. `do_exit()` 는 마지막이니까 리턴될 수가 없자나.
+ 
+다 수행되고 나면 process 는 _EXIT_ZOMBIE_ 상태가 되고. kernel stack 만 잡고있음 이때 parent process 가 커널에다가 알려주면 이때 나머지 자원이 free 됨. 
+
+#### Removing the Process Descriptor
+`do_exit()` 가 끝나도 종료된 프로세스의 process descriptor 는 존재함. (zombie and unrunnable)
+ * 그래서 종료되도 child process info 를 가져올 수 있음.
+ * process descriptor 정리하는 작업은 프로세스 종료와 별도로 해야함.
+    * 이게 `release_task()`
+    
+`release_task()` 의 동작
+ 1. `__exit_signal()` -> `__unhash_process()` -> `detach_pid()`
+    * 프로세스를 pidhash 와 task list 에서 지움.
+ 2. `__exit_signal()` release any resources and finalize statistics and bookkeeping.
+ 3. 해당 task 가 특정 스레드그룹의 마지막 멤버라면 (the reader is a zombie) zombie reader's parent 에게 noti 함.
+ 4. `release_task()` -> `put_task_struct()` 
+    * free pages containing process's kernel stack and _thread_info_ structure,
+    * deallocate the slab cache containing the _task_struct_.
+    
+#### The Dilemma of the Parentless Task
+parent 가 먼저 없어지면 child process 를 정리해줄 놈이 없어져서 child process 는 종료 후에 zombie 가 됨.
+ * reparent 해야함.
+ 
+reparent 방법
+ * 같은 스레드그룹의 다른 프로세스에게 reparent
+    * 실패하면 init process 에게.
+ * `do_exit()` -> `exit_notify()` -> `forget_original_parent()` -> `find_new_reaper()`
+ 
+`find_new_reaper()`구현
+```c
+static struct task_struct *find_new_reaper(struct task_struct *father)
+{
+    struct pid_namespace *pid_ns = task_active_pid_ns(father);
+    struct task_struct *thread;
+    
+    thread = father;
+    while_each_thread(father, thread){ //thread group에서 찾기
+        if(thread->flag & PF_EXITING)
+            continue;
+        if(unlikely(pid_ns->child_reaper == father))
+            pid_ns->child_reaper = thread;
+        return thread;
+    }
+    
+    if(unlikely(pid_ns->child_reaper == father)) { //init process 를 parent로
+        write_unlock_irq(&tasklist_lock);
+        if(unlikely(pid_ns == &init_pid_ns))
+            panic("Attempted to kill init!");
+        
+        zap_pid_ns_processes(pid_ns);
+        write_lock_irq(&tasklist_lock);
+        
+        pid_ns->child_reaper = init_pid_ns.child_reaper;
+    }
+    return pid_ns->child_reaper;
+}
+
+```
+
+reparent 할 새로운 parent 를 찾은 뒤에 reparent 과정
+```c
+reaper = find_new_reapser(father);
+list_for_each_entry_safe(p, n, &father->children, sibling){
+    p->real_parent = reaper;
+    if(p->parent == father){
+        BUG_ON(p->ptrace);
+        p->parent = p->real_parent;
+    }
+    reparent_thread(p, father);
+}
+```
+
+task 가 _ptraced_ 되면 잠시 debugging process 로 reparent 함.
+
+reparenting 을 통해서 zombie 될 일 없음. init process 는 내부적으로 wait() 을 주기적으로 불러서 zombie process 들을 정리해줌.
+
+### Conclusion
 
  
