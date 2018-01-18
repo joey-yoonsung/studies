@@ -419,10 +419,44 @@ list_for_each_entry_safe(p, n, &father->children, sibling){
 }
 ```
 
+ptraced 된 children 은 `ptrace_exit_finish()` 를 콜함
+```c
+void exit_ptrace(struct task_struct *tracer)
+{
+    struct task_struct *p, *n;
+    LIST_HEAD(ptrace_dead);
+    
+    write_lock_irq(&tasklist_lock);
+    list_for_each_entry_safe(p, n, &tracer->ptraced, ptrace_entry){
+        if(__ptrace_detach(tracer, p))
+            list_add(&p->ptrace_entry, &ptrace_dead);
+    }
+    wirte_unlock_irq(&tasklist_lock);
+    
+    BUG_ON(!list_empty(&tracer->ptraced));
+    
+    list_for_each_entry_safe(p, n, &ptrace_dead, ptrace_entry){
+        list_del_init(&p->ptrace_entry);
+        release_task(p);
+    }
+}
+```
+
 task 가 _ptraced_ 되면 잠시 debugging process 로 reparent 함.
+ * parent 가 있으면, parent 아래에 ptraced 된 children 들의 list가 별도로 생김. (맞나?)
 
 reparenting 을 통해서 zombie 될 일 없음. init process 는 내부적으로 wait() 을 주기적으로 불러서 zombie process 들을 정리해줌.
 
 ### Conclusion
+이 챕터에서 다룬 것들
+ * abstraction of the process
+ * generalities of the process
+ * relationship between processes and threads
+ * how Linux stores and represents processes (_task_struct_, _thread_info_)
+ * how processes are created (`fork()`->`clone()`)
+ * how new executable images are loaded into address space (`exec()`)
+ * the hierarchy of the processes
+ * how parents glean info about children (`wait()`)
+ * how processes die (`exit()`)
 
  
