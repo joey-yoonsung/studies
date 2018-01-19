@@ -115,6 +115,7 @@ task_struct 의 state 값으로 프로세스의 현재 상태를 알 수 있음
  * TASK_INTERRUPTIBLE - The process is sleeping(blocked), waiting for some condition to exit.
     * 깨어날 조건이 존재하면 kernel 이 signal 을 보내서 TASK_RUNNING 상태로 바꿈
  * TASK_UNINTERRUPTIBLE - 깨어날 수 없는 상태. (그 외의 조건은 TASK_INTERRUPTIBLE 이랑 같음)
+    * 조건에 맞는 signal 에만 깨어난다.
     * interrupt 되지 않고 기다려야 하는 상황.
  * __TASK_TRACED - The process is being traced by another process, such as a debugger, via _ptrace_.
  * __TASK_STOPPED - Process execution has stooped.
@@ -458,5 +459,8 @@ reparenting 을 통해서 zombie 될 일 없음. init process 는 내부적으�
  * the hierarchy of the processes
  * how parents glean info about children (`wait()`)
  * how processes die (`exit()`)
+ 
+### ToDo
+ * reparent 코드 이해하고 다시 얘기해보기
 
  
