@@ -272,6 +272,7 @@ vfork() 의 동작. (until kernel 2.2)
     * **Q : 그럼 spin lock 으로 기다리나?**
         * fork.c 에 `wait_for_vfork_done()` -> `wait_for_completion_killable()` in [<kernel/sched/completion.c>](https://github.com/torvalds/linux/blob/master/kernel/sched/completion.c)
             * 응 스핀락 맞아.
+        * [linux kernel lock api 정리글](http://egloos.zum.com/nimhaplz/v/5301468)
  4. In the _mm_release()_ function, which is used when a task exits a memory address space, _vfork_done_ is checked to see whether it is NULL. If it is not, the parent is signaled.
  5. Back in do_fork(), the parent wakes up and returns.
  
@@ -462,5 +463,6 @@ reparenting 을 통해서 zombie 될 일 없음. init process 는 내부적으�
  
 ### ToDo
  * reparent 코드 이해하고 다시 얘기해보기
+ * Linux kernel 버전별로 소스 볼 수 있는 곳 [Link](http://elixir.free-electrons.com/linux/v4.15-rc8/source/kernel)
 
  
