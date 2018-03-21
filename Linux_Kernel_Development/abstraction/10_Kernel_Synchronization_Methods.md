@@ -198,3 +198,98 @@ Bottom Halve 의 목적을 생각해보자!  - interrupt 처리하는데 오래 
     2. 데이터를 공유하는 interrupt 가 들어오면?
  * 따라서 여기에 적절한 lock 이 필요하다.
 
+ * `spin_lock_bh()` : lock and disables all bottom havles
+ * `spin_unlock_bh()` : unlock and enables bottom havles
+
+ * tasklet 의 경우는 tasklet 끼리 preempt 할 일이 없기 때문에 lock 만 잡으면 됨
+ * softirq 도 같은 processor 상에서는 preempt 할 일이 없기 때문에 lock 만 잡으면 됨
+
+## Reader-Writer Spin Locks
+상황
+ 1. list 에 update 할 때, 어떤 스레드도 read/write 를 동시에 하면 안됨.
+ 2. list 를 읽을 때, 여러 스레드가 읽어도 되지만, 어느 하나라도 write 하면 안됨.
+
+**reader/writer , producer/consumer 로 나누자!**
+ * Multiple reader can optain reader lock. (shared)
+ * Only one writer can optain writer lock with no concurrent reader.(exclusive)
+ * _shared/exclusive locks_ 또는 _concurrent/exclusive locks_ 이라고도 함
+
+```c
+DEFINE_RWLOCK(mr_rwlock);
+
+read_lock(&mr_rwlock);
+/* critical section : can only read */
+read_unlock(&mr_rwlock);
+
+
+write_lock(&mr_rwlock);
+/* critical section : can read & write*/
+write_unlock(&mr_rwlock);
+```
+ * 단, read_lock 을 unlock 하지 않고 이어서 write_lock 을 이어서 할 수 없다. **DEAD LOCK**
+    * 같은 thread 에서 read_lock 을 또 얻는건 상관없음.
+ * interrupt 에서 보호하고 싶으면 `read_lock_irqsave()` , `write_lock_irqsave()` 를 쓰세요.
+
+**주의할 점**
+ * They favor reader over writers. 일어날 상황을 잘 알고 그에 맞게 디자인해야함. 아니면 오히려 부작용이 클 수 있음
+    * reader 들은 writer 가 unlock 할 때까지 읽지를 못하고
+    * writer 는 모든 reader 가 unlock 할 때까지 쓰질못함.
+ * **Q : 개인이 프로그램 짜면서 마주쳤던 상황에서 reader-writer lock이 적절/부적절 할 수 있는 사례?**
+
+## Semaphores
+ 1. semaphore 를 요청한다.
+ 2. 얻을 수 없다면 task 를 wait queue 에 넣고 task 를 재운다.
+ 3. wait queue 에 task 를 넣은 processor 는 다른 task 를 실행한다.
+ 4. semaphore 를 얻을 수 있는 wait queue 에 있던 task 중 하나를 깨운다.
+
+
+고려할 점
+ 1. lock 을 오랜시간 잡고 있는 경우.
+ 2. 짧은 기간 기다리는 경우는 부적절.
+ 3. process context 에 적합. interrup context 는 not schedulable 해서 안 됨.
+ 4. semaphore 를 hold 하고 있는 동안에도 sleep 할 수 있다. (다른 프로세스가 같은 semaphore 를 얻어가면)
+ 5. semaphore 를 hold 하는 중에 spin lock 을 돌 수 없다. spin lock 을 얻은 중에 sleep 할 수도 없다.
+
+**semaphore versus spin lock** : not busy waiting, but more overhead.
+ 1. sleep 이 필요하냐? (user-space)  **semaphore**
+ 2. hold time 이 짧냐? **spin lock**
+ 3. kernel preemption 을 막을 필요가 있냐? **spin lock**
+
+### Counting and Binary Semaphores
+Holder 수를 정할 수 있다.(count) == (동시에 하나 이상 hold 할 수 있다)
+ * declaration 때 정한다.
+ * 이 count 가 1 일때 : _binary semaphore_ , _mutex_
+ * 1 보다 클때 : _counting semaphore_
+    * kernel 에선 잘 안쓰임. 웬만하면 mutex 로 쓰셈.
+
+다익스트라 아저씨가 formalize 함 (아랜 내맘대로 pseudo code)
+```c
+if(count >= 0){
+    aquire_lock();
+    down(); //count--;
+}else{
+    on_wait_queue(this);
+}
+
+when(release){
+    up(); //count++;
+}
+```
+
+### Creating and Initializing Semaphores
+
+```c
+struct semaphore name;
+sema_init(&name, count); //concurrent usage count
+
+static DCLARE_MUTEX(name); // sema_init(&name, 1);
+
+sema_init(sem, count); // dynamic create : pointer reference 를 넘긴다.
+init_MUTEX(sem);    // API 에 일관성 없는걸로 놀라지 마세용
+```
+
+### Using Semaphores
+
+ * `down_interruptible()` : 세마포를 못 얻으면 TASK_INTERRUPTIBLE 로 task state 를 바꾸고 sleep 한다. waiting 도중에 signal 이 오면 
+ * `down()` :
+
