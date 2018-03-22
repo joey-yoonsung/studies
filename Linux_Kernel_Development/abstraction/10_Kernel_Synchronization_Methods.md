@@ -290,6 +290,154 @@ init_MUTEX(sem);    // API 에 일관성 없는걸로 놀라지 마세용
 
 ### Using Semaphores
 
- * `down_interruptible()` : 세마포를 못 얻으면 TASK_INTERRUPTIBLE 로 task state 를 바꾸고 sleep 한다. waiting 도중에 signal 이 오면 
- * `down()` :
+ * `down_interruptible()` : 세마포를 못 얻으면 TASK_INTERRUPTIBLE 로 task state 를 바꾸고 sleep 한다. waiting 도중에 signal 이 오면 _EINTER_ 를 리턴함.
+ * `down()` : TASK_UNINTERRUPTIBLE 로 task state 를 바꾸고 sleep 한다. semaphore 를 기다리는 프로세스가 singal 에 응답하지 않는다.
+ * `down_trylock()` : blocking 없이 세마포를 얻을 수 있다. 세마포가 이미 hold 되어있으면 nonzero 를 리턴함. 0을 리턴하면 세마포를 얻은 것.
+ * `up()` : release semaphore
 
+```c
+static DECLARE_MUTEX(mr_sem);
+
+if(down_interruptible(&mr_sem)){
+    /* singal 이 오면 semphore 를 못얻음 */
+}
+/*critical region*/
+up(&mr_sem);  // release semaphore
+```
+
+## Reader-Writer Semaphores
+앞의 spin lock 과 개념은 같음.
+
+`struct rw_semaphore` type declared in `<linux/rwsem.h>`
+
+```c
+static DECLARE_RWSEM(name);  // static declare
+init_rwsem(struct rw_semaphore *sem) // dynamic declare
+```
+
+usage
+```c
+static DECLARE_RWSEM(mr_rwsem);  // static declare
+down_read(&mr_rwsem);
+/* critical region : read only */
+up_read(&mr_rwsem);
+
+down_write(&mr_rwsem);
+/* critical region : read and write */
+up_write(&mr_rwsem);
+```
+
+위에서 설명한 try 형식 메소드도 지원 :  `down_read_trylock(struct rw_semaphore *sem)`, `down_write_trylock(struct rw_semaphore *sem)`
+
+`downgrade_write()` : atomic 하게 이미 얻은 write_lock 을 read_lock 으로 바꿈.
+ * write_lock 얻고 read_lock 얻을 생각하지 말고, write_lock 얻은 다음에 이 메소드를 부르면 됨.
+
+## Mutexes
+mutual exclusion lock - sleeping version of spin lock , simpler sleeping lock
+
+usage
+```c
+DEFINE_MUTEX(name); // static
+mutex_init(&mutex); // dynamic
+
+mutex_lock(&mutex);
+/* ciritical region*/
+mutex_unlock(&mutex);
+```
+
+#### constraints
+기존 세마포보다 stricter, narrower use case.
+ 1. only one task can hold the mutex at a time.
+ 2. lock 잡은 context 에서 unlock 해야함. - kernel / user space 사이에서 synchronization 하는 경우에 부적절
+ 3. no recursive use
+ 4. mutex 잡는 동안 프로세스가 끝날 수 없음
+ 5. interrupt handler 나 bottom half 에서 사용할 수 없음.(try 종류도 마찬가지)
+ 6. official API 로만 사용할 수 있음.
+
+디버깅 하고 싶으면 _CONFIG_DEBUG_MUTEXES_ 커널옵션을 enable 시켜야함.
+
+### Semaphores Versus Mutexes
+위의 constraints 가 문제되지 않는다면 semaphore 보다 mutex 를 쓰세요.
+
+### Spin Locks Versus Mutexes
+ * spin lock 은 interrupt context 에서 쓸 수 있고
+ * Mutex 는 sleep 할 수 있다.
+
+#### What to use
+ * Low overhead locking : **Spin Lock** (preferred)
+ * Short lock hold time : **Spin Lock** (preferred)
+ * Long lock hold time : **Mutex** (preferred)
+ * Need to lock from interrupt context : **Spin Lock** (required)
+ * Need to sleep while holding lock: **Mutex** (required)
+
+## Completion Variables
+커널에서 두개의 task 사이에서 한쪽에서 다른 한쪽으로 signal 보낼 때 쓰기 쉬운 방법.
+ * 한놈이 completion variable 을 기다리고, 다른쪽에서 일이 끝나면 해당 completion variable 로 기다리는 쪽을 깨운다.
+ * 예 : parent 가 child를 vfork() 하고, child 가 exec 나 exit 했을때 parent process 를 깨우면 parent process 는 fork 를 마치고 남은 작업을 진행한다.
+ * `<kernel/sched.c> <kernel/fork.c>` 를 보면 사용하는거를 찾아볼 수 있음
+
+`struct completion` type declared in `<linux/completion.h>`
+
+```c
+DECLARE_COMPLETION(mr_comp); //static
+init_completion(&mr_comp); //dynamic
+wait_for_completion(&mr_comp); // waits given completion variable
+complete(&mr_comp); // signal any waiting tasks to wake up
+```
+
+## BKL : The Big Kernel Lock
+global spin lock
+ * 원래 SMP impl 을 fine-grained locking 로 쉽게 전환하기 위해 만들어짐.
+
+특이점
+ * BKL 을 잡는동안 sleep  할 수 있다. (안전하다는 건 아님, 데드락 주의!)
+    * unschedule 될때 자동으로 holding 을 drop 하고, reschedule 될 때 다시 얻는다.
+ * recursive lock - single process 가 여러번 lock 을 얻을 수 있음 (not dead lock)
+    * `lock_kernel()` 부른 횟수 만큼 `unlock_kernel()` 을 불러줘야함.
+    * `kernel_locked()` return nonzero (락 잡고있으면)
+    * `<linux/smp_lock.h>
+ * can use only in process context. (cannot in interrupt context)
+ * kernel preemption 을 disable 함.
+ * BKL 쓰는 사람이 점점 없어짐...?
+    * kernel 2.0 에서 2.2 로 전환하기 쉽게하기 위해 제공 되었음.
+    * data 를 보호한다기 보다 code 블럭을 보호하기 위하는 느낌적인 느낌.
+        * 무엇을 보호하고 싶은건지..? 가 불분명함.
+
+## Sequential Locks
+write_lock 을 요구할 때마다 sequence count 가 올라감.
+read 하기 전에 sequence count 를 확인하고, 자신이 read 요청할때의 sequence count 와 같아질 때까지 기다렸다가. 같아지면 read 함.
+ * read 하는동안 write 할 수는 없음.
+ * 짝수 - write 하는중이 아님. (write lock 이 홀수를 만들고, lock 을 release 할 때 짝수를 만듬)
+
+```c
+seqlock_t mr_seq_lock = DEFINE_SEQLOCK(mr_seq_lock);
+
+write_seqlock(&mr_seq_lock);
+/* wirte lock 얻었당! mr_seq_lock become odd number*/
+write_sequnlock(&mr_seq_lock); // mr_seq_lock become even number
+
+// read 하는 방식에 주목
+unsigned long seq;
+do{
+    seq = read_seqbegin(&mr_seq_lock);
+    /* read here */
+}while(read_seqretry(&mr_seq_lock, seq));
+
+```
+
+many readers & few writers 일 때, lightweight and scalable lock 으로 유용.
+ * But, favor writers over readers (앞의 다른 Reader-Writer lock 들은 favor reader over writers)
+ * 다른 writer 가 없는 이상 write lock 을 항상 얻을 수 있음
+ * 더이상 writer 없을 때까지 reader 는 무한정 기다려야함!
+
+Requirement
+ * a lot of readers
+ * few writers
+ * favor writers over readers and never allow readers to starve writers.
+ * data is simple. atomic data 로 만들 수 없음.
+
+
+웬만하면 쓰지마셈
+ * 근데 왜 소개?
+    * 알아둘 필요가 있으니까!
+    * spin lock 과 동작은 비슷.
