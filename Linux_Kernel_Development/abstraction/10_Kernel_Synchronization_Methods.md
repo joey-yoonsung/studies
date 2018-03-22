@@ -403,6 +403,10 @@ global spin lock
     * data 를 보호한다기 보다 code 블럭을 보호하기 위하는 느낌적인 느낌.
         * 무엇을 보호하고 싶은건지..? 가 불분명함.
 
+**웬만하면 쓰지마셈**
+ * 근데 왜 소개?
+    * 알아둘 필요가 있으니까!
+
 ## Sequential Locks
 write_lock 을 요구할 때마다 sequence count 가 올라감.
 read 하기 전에 sequence count 를 확인하고, 자신이 read 요청할때의 sequence count 와 같아질 때까지 기다렸다가. 같아지면 read 함.
@@ -436,8 +440,3 @@ Requirement
  * favor writers over readers and never allow readers to starve writers.
  * data is simple. atomic data 로 만들 수 없음.
 
-
-웬만하면 쓰지마셈
- * 근데 왜 소개?
-    * 알아둘 필요가 있으니까!
-    * spin lock 과 동작은 비슷.
