@@ -444,7 +444,7 @@ _jiffies_
  * machine 이 booting 된 후부터 clock tick 64bit number count.
  * 64 bit 를 atomic 하게 못 읽으니까 `get_jiffies_64() 는 seq lock 을 구현함.
 
- 지피값 읽을 때
+ * 지피값 읽을 때
  ```c
  u64 get_fiffies_64(void)
  {
@@ -459,9 +459,88 @@ _jiffies_
  }
  ```
 
- 지피값 쓸 때
+ * 지피값 쓸 때
  ```c
  write_seqlock(&xtime_lock);
  jiffies_64 += 1;
  write_sequnlock(&xtime_lock);
  ```
+ * 지피 값에 대한 자세한 내용은 Chapter11 에서...
+
+
+## Preemption Disabling
+kernel 의 preemption code 는 preemption 하지 말아야할 영역 표시를 위해서 spin lock 을 씀. 
+
+concurrency 가능성이 없는 데이터(uni-processor, 또는 하나의 processor 에만 접근하는 데이터)도 역시 preemption 에 대비한 lock 은 해야함.
+
+ * `preempt_disable()` : preempt count 를 증가시킴.
+ * `preempt_enable()` : preempt count 를 감소시킴. // count 가 0 이면 reschedule 할 놈이 있는지 확인.
+ * `preempt_enable_no_resched()` : preempt count 를 감소시킴. // reschedule 할 놈이 있는지 확인안함. 
+ * `preempt_count()` : 현재 preempt count 를 가져옴. 0이면 preemption 할 수 있음.  
+
+ 이 preemption disabling 을 사용해서 per-processor data issue 를 해결 할 수 있다.
+```c
+int cpu;
+cpu = get_cpu();    // disable kernel preemption and set "cpu" to the current processor
+put_cpu();         // enable kernel preemption
+```
+
+## Ordering and Barriers
+_barriers_ instruction 들을 이용해서 compile 때 re-ordering 되는 걸 막을 수 있어.
+
+```c
+a=1;
+b=2;
+```
+ * 컴파일러가 컴파일할때 a, b가 서로 상관없으니까 나름대로 규칙에 따라 b 가 먼저 세팅되도록 re-ordering 할 수 있음. (static)
+ * processor 는 dynamic 하게 돌면서 fetching & dispatching 하는 방식으로 re-ordering 할 수 있음. (a 랑 b 가 dependency 가 없다는 전제하에)
+ 
+```c
+a=1;
+b=a;
+```
+ * 이런 코드는 processor 가 a 와 b 의 dependency 가 분명하기 때문에 re-ordering 안함.
+ 
+하드웨어 차원에서도 할 수 있음
+  * `rmb()` : read memory barrier 를 제공. 이 메소드 앞에 있는 load instruction 을 이 메소드 이후로 re-ordering 불가.
+  * `wmb()` : write memory barrier - rmb 와 비슷 - store instruction 에 대해서 
+  * `mb()` : read | write 전부.
+  * `read_barrier_depends()` : read barrier 인데, 앞뒤로 dependency 가 있는 경우에만 barrier (꼭 필요한 경우에만 한다는 뜻)
+  
+#### 예제 1
+```c
+init : a = 1;, b = 2;
+
+Thread 1        |       Thread2
+a = 3;
+mb();
+b = 4;          |       c = b;
+                        rmb();
+                        d = a;
+```
+ * mb() 는 a와 b 가 순서대로 쓰이도록 보장.
+ * rmb() 는 c가 b 를, d 가 a를 순서대로 읽도록 보장.
+ * **Q : 그래도 c 가 b 를 읽을 때 2가 올지, 4가 올지는 보장이 안되는거 아닌가?**
+    * d 에는 3이 들어가는 것이 확실히 보장됨.
+    
+#### 예제 2 
+```c
+init : a = 1;, b = 2;
+
+Thread 1        |       Thread2
+a = 3;
+mb();
+p = &a;         |       pp = p;
+                        read_barrier_depends();
+                        b = *pp;
+```
+ * read_barrier_depends() : b 가 확실히 a 값을 갖도록 보장.
+    * mb() : a가 확실히 3값을 갖고 p 에 읽히도록 보장
+    
+UP kernel 은 only compiler barrier
+
+SMP 용은`smp_rmb()`, `smp_wmb()`, `smp_mb()`,  `smp_read_barrier_depends()` SMP 최적화.
+
+* barrier() : load | store 에 대해서 compiler-barrier 그런데 컴파일러 barrier 는 약해. (processor 가 re-ordering 하는거 못 막으니까)
+
+**주의** : 대신 아키텍처나 버전에 따라서 확인하고 worst case 에 대비해서 써야함. (Intel x86 processor 는 `wmb()`가 아무것도 안함. )
