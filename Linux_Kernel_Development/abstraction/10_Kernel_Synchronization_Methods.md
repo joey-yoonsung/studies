@@ -440,3 +440,28 @@ Requirement
  * favor writers over readers and never allow readers to starve writers.
  * data is simple. atomic data 로 만들 수 없음.
 
+_jiffies_
+ * machine 이 booting 된 후부터 clock tick 64bit number count.
+ * 64 bit 를 atomic 하게 못 읽으니까 `get_jiffies_64() 는 seq lock 을 구현함.
+
+ 지피값 읽을 때
+ ```c
+ u64 get_fiffies_64(void)
+ {
+    unsinged long seq;
+    u64 ret;
+
+    do{
+        seq = read_seqbegin(&xtime_lock);
+        ret = jiffies_64;
+    }while(read_seqretry(&xtime_lock, seq));
+    return ret;
+ }
+ ```
+
+ 지피값 쓸 때
+ ```c
+ write_seqlock(&xtime_lock);
+ jiffies_64 += 1;
+ write_sequnlock(&xtime_lock);
+ ```
