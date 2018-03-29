@@ -428,8 +428,7 @@ do{
     seq = read_seqbegin(&mr_seq_lock);
     /* read here */
 }while(read_seqretry(&mr_seq_lock, seq));
-//*read 가 여기 있어야 하는거 아닌가?
-
+//* 근데 while 을 왜 돌지?
 ```
 
 many readers & few writers 일 때, lightweight and scalable lock 으로 유용.
