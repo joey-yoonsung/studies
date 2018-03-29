@@ -412,6 +412,8 @@ write_lock 을 요구할 때마다 sequence count 가 올라감.
 read 하기 전에 sequence count 를 확인하고, 자신이 read 요청할때의 sequence count 와 같아질 때까지 기다렸다가. 같아지면 read 함.
  * read 하는동안 write 할 수는 없음.
  * 짝수 - write 하는중이 아님. (write lock 이 홀수를 만들고, lock 을 release 할 때 짝수를 만듬)
+ * 여러 reader 가 동시에 얻지는 못함.
+ * [이 설명이랑 다른거같은데?](https://github.com/torvalds/linux/blob/master/include/linux/seqlock.h)
 
 ```c
 seqlock_t mr_seq_lock = DEFINE_SEQLOCK(mr_seq_lock);
@@ -426,6 +428,7 @@ do{
     seq = read_seqbegin(&mr_seq_lock);
     /* read here */
 }while(read_seqretry(&mr_seq_lock, seq));
+//*read 가 여기 있어야 하는거 아닌가?
 
 ```
 
